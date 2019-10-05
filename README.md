@@ -1,305 +1,481 @@
-In this project, we use Keras to build a deep convolutional neural network to identify whether a picture is a cat or a dog. The accuracy on the verification set can reach 99.6%. It is recommended to use a GPU to run the project. The version of Keras used in this project is 1.2.2. If you are using a more advanced version, there may be a slight parameter change.
+In this project, we use Keras to build a deep convolutional neural network to identify whether a picture is a cat or a dog. The accuracy on the verification set can reach 99.6%. It is recommended to use a GPU to run the project. The version of tensorflow used in this project is 2.0. If you are using another version, there may be a slight parameter change.
 
 # Dogs vs. Cats Redux: Kernels Edition
 
-The dataset comes from a competition on kaggle: [Dogs vs. Cats](https://www.kaggle.com/c/dogs-vs-cats-redux-kernels-edition), with 25,000 training sets, cats and dogs Half of it. There are 12,500 test sets, and a cat or a dog is not defined.
+The dataset comes from a competition on kaggle: [Dogs vs. Cats](<https://www.kaggle.com/c/dogs-vs-cats/data>). It has the following structure.
 
 ```
-➜ ls train | head
-cat.0.jpg
-cat.1.jpg
-cat.10.jpg
-cat.100.jpg
-cat.1000.jpg
-cat.10000.jpg
-cat.10001.jpg
-cat.10002.jpg
-cat.10003.jpg
-cat.10004.jpg
-➜ ls test | head
-1.jpg
-10.jpg
-100.jpg
-1000.jpg
-10000.jpg
-10001.jpg
-10002.jpg
-10003.jpg
-10004.jpg
-10005.jpg
+cats_and_dogs_filtered
+|__ train
+    |______ cats: [cat.0.jpg, cat.1.jpg, cat.2.jpg ....]
+    |______ dogs: [dog.0.jpg, dog.1.jpg, dog.2.jpg ...]
+|__ validation
+    |______ cats: [cat.2000.jpg, cat.2001.jpg, cat.2002.jpg ....]
+    |______ dogs: [dog.2000.jpg, dog.2001.jpg, dog.2002.jpg ...]
 ```
 
 Here are some examples in training data：
 
 ![](https://raw.githubusercontent.com/ypwhs/resources/master/dataset.png)
 
-# Data preprocessing
+# Import packages
 
-The file name of our dataset is named like `type.num.jpg`, such as `cat.0.jpg`. ImageDataGenerator of Keras requires different types of images to be grouped into different folders. So we need to preprocess the data set. The main idea here is to create a symbolic link, which don't need to copy the image and taking up more space.
+The `os` package is used to read files and directory structure, NumPy is used to convert python list to numpy array and to perform required matrix operations and `matplotlib.pyplot` to plot the graph and display images in the training and validation data.
 
 ```py
+from __future__ import absolute_import, division, print_function, unicode_literals
+```
+
+Import Tensorflow and the Keras classes needed to construct our model.
+
+```
+import tensorflow as tf
+```
+
+```
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense, Conv2D, Flatten, Dropout, MaxPooling2D
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+
 import os
-import shutil
-
-train_filenames = os.listdir('train')
-train_cat = filter(lambda x:x[:3] == 'cat', train_filenames)
-train_dog = filter(lambda x:x[:3] == 'dog', train_filenames)
-
-def rmrf_mkdir(dirname):
-    if os.path.exists(dirname):
-        shutil.rmtree(dirname)
-    os.mkdir(dirname)
-
-rmrf_mkdir('train2')
-os.mkdir('train2/cat')
-os.mkdir('train2/dog')
-
-rmrf_mkdir('test2')
-os.symlink('../test/', 'test2/test')
-
-for filename in train_cat:
-    os.symlink('../../train/'+filename, 'train2/cat/'+filename)
-
-for filename in train_dog:
-    os.symlink('../../train/'+filename, 'train2/dog/'+filename)
-```
-
-We can see the structure of the folder from the following picture. There are two folders in train2, which are cats and dogs, and each folder has 12,500 images.
-
-```
-├── test [12500 images]
-├── test.zip
-├── test2
-│   └── test -> ../test/
-├── train [25000 images]
-├── train.zip
-└── train2
-    ├── cat [12500 images]
-    └── dog [12500 images]
-```
-
-# Export feature vector
-
-For this topic, it is better to use a pre-trained network. After the previous tests, we tested different networks such as ResNet50, but the rankings are not high. It ranked only one or two hundred, so we need to improve our model performance. Then an effective method is to combine different models to get a good effect. We can save the feature vectors of different network outputs for subsequent training. Once we save the feature vector, it can be easily trained even in a normal notebook.
-
-```py
-from keras.models import *
-from keras.layers import *
-from keras.applications import *
-from keras.preprocessing.image import *
-
-import h5py
-
-def write_gap(MODEL, image_size, lambda_func=None):
-    width = image_size[0]
-    height = image_size[1]
-    input_tensor = Input((height, width, 3))
-    x = input_tensor
-    if lambda_func:
-        x = Lambda(lambda_func)(x)
-    
-    base_model = MODEL(input_tensor=x, weights='imagenet', include_top=False)
-    model = Model(base_model.input, GlobalAveragePooling2D()(base_model.output))
-
-    gen = ImageDataGenerator()
-    train_generator = gen.flow_from_directory("train2", image_size, shuffle=False, 
-                                              batch_size=16)
-    test_generator = gen.flow_from_directory("test2", image_size, shuffle=False, 
-                                             batch_size=16, class_mode=None)
-
-    train = model.predict_generator(train_generator, train_generator.nb_sample)
-    test = model.predict_generator(test_generator, test_generator.nb_sample)
-    with h5py.File("gap_%s.h5"%MODEL.func_name) as h:
-        h.create_dataset("train", data=train)
-        h.create_dataset("test", data=test)
-        h.create_dataset("label", data=train_generator.classes)
-
-write_gap(ResNet50, (224, 224))
-write_gap(InceptionV3, (299, 299), inception_v3.preprocess_input)
-write_gap(Xception, (299, 299), xception.preprocess_input)
-
-```
-
-In order to reuse the code, It is necessary to write a function, then our function needs to input the model, the size of the input image, and [[preprocessing function](https://github.com/fchollet/keras/blob /master/keras/applications/inception_v3.py#L389-L393)] . Because both Xception and Inception V3 need to limit the data to `(-1, 1)`, we use `GlobalAveragePooling2D`, otherwise the output file will be very large and easy to overfit. Then we define two generators, use the `model.predict_generator` function to derive the feature vector, and finally we choose the three models ResNet50, Xception, Inception V3 (if you are interested, you can also try VGG). Each model is exported for a long time, and it takes about **10 minutes to 20 minutes** on aws p2.xlarge. All three models are pre-trained on [[ImageNet](http://www.image-net.org/)]. They can highly summarize what is in a picture.
-
-The last exported h5 file consists of three numpy arrays:
-
-* train (25000, 2048)
-* test (12500, 2048)
-* label (25000,)
-
-Reference materials:
-
-* [ResNet](https://arxiv.org/abs/1512.03385) 15.12
-* [Inception v3](https://arxiv.org/abs/1512.00567) 15.12
-* [Xception](https://arxiv.org/abs/1610.02357) 16.10
-
-# Load feature vector
-
-After the above code, we obtained three feature vector files, which are:
-
-* gap_ResNet50.h5
-* gap_InceptionV3.h5
-* gap_Xception.h5
-
-We need to load these feature vectors and combine them into a feature vector, then remember to scramble X and y, otherwise we will have problems when we set `validation_split`.
-
-```py
-import h5py
 import numpy as np
-from sklearn.utils import shuffle
-np.random.seed(2017)
-
-X_train = []
-X_test = []
-
-for filename in ["gap_ResNet50.h5", "gap_Xception.h5", "gap_InceptionV3.h5"]:
-    with h5py.File(filename, 'r') as h:
-        X_train.append(np.array(h['train']))
-        X_test.append(np.array(h['test']))
-        y_train = np.array(h['label'])
-
-X_train = np.concatenate(X_train, axis=1)
-X_test = np.concatenate(X_test, axis=1)
-
-X_train, y_train = shuffle(X_train, y_train)
+import matplotlib.pyplot as plt
 ```
 
-# Building a model
 
-The construction of the model is very simple, just dropout and then classify.
+
+# Load data
+
+Begin by downloading the dataset. This tutorial uses a filtered version of [Dogs vs Cats](https://www.kaggle.com/c/dogs-vs-cats/data) dataset from Kaggle. Download the archive version of the dataset and store it in the "/tmp/" directory.
 
 ```py
-from keras.models import *
-from keras.layers import *
+_URL = 'https://storage.googleapis.com/mledu-datasets/cats_and_dogs_filtered.zip'
 
-np.random.seed(2017)
+path_to_zip = tf.keras.utils.get_file('cats_and_dogs.zip', origin=_URL, extract=True)
 
-input_tensor = Input(X_train.shape[1:])
-x = Dropout(0.5)(input_tensor)
-x = Dense(1, activation='sigmoid')(x)
-model = Model(input_tensor, x)
+PATH = os.path.join(os.path.dirname(path_to_zip), 'cats_and_dogs_filtered')
+```
 
-model.compile(optimizer='adadelta',
+After extracting its contents, assign variables with the proper file path for the training and validation set.
+
+```
+train_dir = os.path.join(PATH, 'train')
+validation_dir = os.path.join(PATH, 'validation')
+```
+
+```
+train_cats_dir = os.path.join(train_dir, 'cats')  # directory with our training cat pictures
+train_dogs_dir = os.path.join(train_dir, 'dogs')  # directory with our training dog pictures
+validation_cats_dir = os.path.join(validation_dir, 'cats')  # directory with our validation cat pictures
+validation_dogs_dir = os.path.join(validation_dir, 'dogs')  # directory with our validation dog pictures
+```
+
+
+
+# Understand the data
+
+Let's look at how many cats and dogs images are in the training and validation directory:
+
+```py
+num_cats_tr = len(os.listdir(train_cats_dir))
+num_dogs_tr = len(os.listdir(train_dogs_dir))
+
+num_cats_val = len(os.listdir(validation_cats_dir))
+num_dogs_val = len(os.listdir(validation_dogs_dir))
+
+total_train = num_cats_tr + num_dogs_tr
+total_val = num_cats_val + num_dogs_val
+```
+
+```
+print('total training cat images:', num_cats_tr)
+print('total training dog images:', num_dogs_tr)
+
+print('total validation cat images:', num_cats_val)
+print('total validation dog images:', num_dogs_val)
+print("--")
+print("Total training images:", total_train)
+print("Total validation images:", total_val)
+```
+
+For convenience, set up variables to use while pre-processing the dataset and training the network.
+
+```
+batch_size = 128
+epochs = 15
+IMG_HEIGHT = 150
+IMG_WIDTH = 150
+```
+
+
+
+# Data preparation
+
+Format the images into appropriately pre-processed floating point tensors before feeding to the network:
+
+1. Read images from the disk.
+2. Decode contents of these images and convert it into proper grid format as per their RGB content.
+3. Convert them into floating point tensors.
+4. Rescale the tensors from values between 0 and 255 to values between 0 and 1, as neural networks prefer to deal with small input values.
+
+Fortunately, all these tasks can be done with the `ImageDataGenerator` class provided by [`tf.keras`](https://www.tensorflow.org/api_docs/python/tf/keras). It can read images from disk and preprocess them into proper tensors. It will also set up generators that convert these images into batches of tensors—helpful when training the network.
+
+```py
+train_image_generator = ImageDataGenerator(rescale=1./255) # Generator for our training data
+validation_image_generator = ImageDataGenerator(rescale=1./255) # Generator for our validation data
+```
+
+After defining the generators for training and validation images, the `flow_from_directory`method load images from the disk, applies rescaling, and resizes the images into the required dimensions.
+
+```dot
+train_data_gen = train_image_generator.flow_from_directory(batch_size=batch_size,
+                                                           directory=train_dir,
+                                                           shuffle=True,
+                                                           target_size=(IMG_HEIGHT, IMG_WIDTH),
+                                                           class_mode='binary')
+```
+
+```
+val_data_gen = validation_image_generator.flow_from_directory(batch_size=batch_size,
+                                                              directory=validation_dir,
+                                                              target_size=(IMG_HEIGHT, IMG_WIDTH),
+                                                              class_mode='binary')
+```
+
+
+
+# Visualize training images
+
+Visualize the training images by extracting a batch of images from the training generator—which is 32 images in this example—then plot five of them with `matplotlib`.
+
+```py
+sample_training_images, _ = next(train_data_gen)
+```
+
+The `next` function returns a batch from the dataset. The return value of `next` function is in form of `(x_train, y_train)` where x_train is training features and y_train, its labels. Discard the labels to only visualize the training images.
+
+```
+# This function will plot images in the form of a grid with 1 row and 5 columns where images are placed in each column.
+def plotImages(images_arr):
+    fig, axes = plt.subplots(1, 5, figsize=(20,20))
+    axes = axes.flatten()
+    for img, ax in zip( images_arr, axes):
+        ax.imshow(img)
+        ax.axis('off')
+    plt.tight_layout()
+    plt.show()
+```
+
+```
+plotImages(sample_training_images[:5])
+```
+
+
+
+# Create the model
+
+The model consists of three convolution blocks with a max pool layer in each of them. There's a fully connected layer with 512 units on top of it that is activated by a `relu` activation function. The model outputs class probabilities based on binary classification by the `sigmoid` activation function.
+
+```py
+model = Sequential([
+    Conv2D(16, 3, padding='same', activation='relu', input_shape=(IMG_HEIGHT, IMG_WIDTH ,3)),
+    MaxPooling2D(),
+    Conv2D(32, 3, padding='same', activation='relu'),
+    MaxPooling2D(),
+    Conv2D(64, 3, padding='same', activation='relu'),
+    MaxPooling2D(),
+    Flatten(),
+    Dense(512, activation='relu'),
+    Dense(1, activation='sigmoid')
+])
+```
+
+
+
+# Compile the model
+
+For this tutorial, choose the *ADAM* optimizer and *binary cross entropy* loss function. To view training and validation accuracy for each training epoch, pass the `metrics` argument.
+
+```
+model.compile(optimizer='adam',
               loss='binary_crossentropy',
               metrics=['accuracy'])
 ```
 
-We can also visualize the model:
 
-```dot
-digraph G{
-    node [shape=record]
-    a[label="ResNet50|{input:|output:}|{(224, 224, 3)|(2048)}"]
-    b[label="InceptionV3|{input:|output:}|{(299, 299, 3)|(2048)}"]
-    c[label="Xception|{input:|output:}|{(299, 299, 3)|(2048)}"]
-    Merge[label="Merge|{input:|output:}|{(3, 2048)|(6144)}"]
-    Dropout[label="Dropout|Rate:|0.5"]
-    Output[label="Output|{input:|output:}|{(6144)|(1)}"]
-    Image -> a -> Merge
-    Image -> b -> Merge
-    Image -> c -> Merge
-    Merge -> Dropout -> Output
-}
-```
 
-![](https://raw.githubusercontent.com/ypwhs/resources/master/model.png)
+# Model summary
 
-# Training model
-
-After the model component is ready, we can train it. Here we set the validation set size to 20%, which means that the training set is 20,000 images and the validation set is 5000 images.
-
-```py
-model.fit(X_train, y_train, batch_size=128, nb_epoch=8, validation_split=0.2)
-```
+View all the layers of the network using the model's `summary` method:
 
 ```
-Train on 20000 samples, validate on 5000 samples
-Epoch 1/8
-20000/20000 [==============================] - 1s - loss: 0.1193 - acc: 0.9591 - val_loss: 0.0283 - val_acc: 0.9936
-Epoch 2/8
-20000/20000 [==============================] - 0s - loss: 0.0319 - acc: 0.9898 - val_loss: 0.0181 - val_acc: 0.9952
-Epoch 3/8
-20000/20000 [==============================] - 0s - loss: 0.0252 - acc: 0.9916 - val_loss: 0.0172 - val_acc: 0.9934
-Epoch 4/8
-20000/20000 [==============================] - 0s - loss: 0.0214 - acc: 0.9936 - val_loss: 0.0140 - val_acc: 0.9956
-Epoch 5/8
-20000/20000 [==============================] - 0s - loss: 0.0200 - acc: 0.9926 - val_loss: 0.0139 - val_acc: 0.9954
-Epoch 6/8
-20000/20000 [==============================] - 0s - loss: 0.0189 - acc: 0.9933 - val_loss: 0.0129 - val_acc: 0.9956
-Epoch 7/8
-20000/20000 [==============================] - 0s - loss: 0.0170 - acc: 0.9946 - val_loss: 0.0123 - val_acc: 0.9960
-Epoch 8/8
-20000/20000 [==============================] - 0s - loss: 0.0163 - acc: 0.9945 - val_loss: 0.0119 - val_acc: 0.9958
-Out[4]:
-
+model.summary()
 ```
 
-We can see that the training process is very fast, the training can be completed within ten seconds, and the accuracy rate is also very high. The accuracy rate is up to 99.6% on the verification set.
+  
 
-# Forecast test set
+# Train the model
 
-Once the model is trained, we can predict the test set and submit it to kaggle for the final score.
-
-```py
-y_pred = model.predict(X_test, verbose=1)
-y_pred = y_pred.clip(min=0.005, max=0.995)
-
-import pandas as pd
-from keras.preprocessing.image import *
-
-df = pd.read_csv("sample_submission.csv")
-
-gen = ImageDataGenerator()
-test_generator = gen.flow_from_directory("test2", (224, 224), shuffle=False, 
-                                         batch_size=16, class_mode=None)
-
-for i, fname in enumerate(test_generator.filenames):
-    index = int(fname[fname.rfind('/')+1:fname.rfind('.')])
-    df.set_value(index-1, 'label', y_pred[i])
-
-df.to_csv('pred.csv', index=None)
-df.head(10)
-```
-
-预测这里我们用到了一个小技巧，我们将每个预测值限制到了 [0.005, 0.995] 个区间内，这个原因很简单，kaggle 官方的评估标准是 [LogLoss](https://www.kaggle.com/c/dogs-vs-cats-redux-kernels-edition/details/evaluation)，对于预测正确的样本，0.995 和 1 相差无几，但是对于预测错误的样本，0 和 0.005 的差距非常大。参考 [LogLoss 如何处理无穷大问题](https://www.kaggle.com/wiki/LogLoss)，下面的表达式就是二分类问题的 LogLoss 定义。
-
-
-
-We used a little trick in predicting. We limited each prediction to [0.005, 0.995] intervals. The official evaluation standard for kaggle is  [LogLoss](https://www.kaggle.com/c/dogs-vs-cats-redux-kernels-edition/details/evaluation). For predicting the correct sample, 0.995 and 1 are almost the same, but for the sample with the wrong prediction, the difference between 0 and 0.005 is very large. For more information[[How LogLoss handles infinity problems](https://www.kaggle.com/wiki/LogLoss)], the following expression is the LogLoss definition for the two-category problem.
-
-![](https://raw.githubusercontent.com/ypwhs/resources/master/logloss.png)
-
-Another point worth mentioning is that the file names of the test set are not sorted by 1, 2, 3, but in the following order:
+Use the `fit_generator` method of the `ImageDataGenerator` class to train the network.
 
 ```
-['test/1.jpg',
- 'test/10.jpg',
- 'test/100.jpg',
- 'test/1000.jpg',
- 'test/10000.jpg',
- 'test/10001.jpg',
- 'test/10002.jpg',
- 'test/10003.jpg',
- ......
+history = model.fit_generator(
+    train_data_gen,
+    steps_per_epoch=total_train // batch_size,
+    epochs=epochs,
+    validation_data=val_data_gen,
+    validation_steps=total_val // batch_size
+)
 ```
 
-So we need to process each file name, assign it to df, and finally export it as a csv file.
+# Visualize training results
+
+Now visualize the results after training the network.
 
 ```
-	id	label
-0	1	0.995
-1	2	0.995
-2	3	0.995
-3	4	0.995
-4	5	0.005
-5	6	0.005
-6	7	0.005
-7	8	0.005
-8	9	0.005
-9	10	0.005
+acc = history.history['accuracy']
+val_acc = history.history['val_accuracy']
+
+loss = history.history['loss']
+val_loss = history.history['val_loss']
+
+epochs_range = range(epochs)
+
+plt.figure(figsize=(8, 8))
+plt.subplot(1, 2, 1)
+plt.plot(epochs_range, acc, label='Training Accuracy')
+plt.plot(epochs_range, val_acc, label='Validation Accuracy')
+plt.legend(loc='lower right')
+plt.title('Training and Validation Accuracy')
+
+plt.subplot(1, 2, 2)
+plt.plot(epochs_range, loss, label='Training Loss')
+plt.plot(epochs_range, val_loss, label='Validation Loss')
+plt.legend(loc='upper right')
+plt.title('Training and Validation Loss')
+plt.show()
 ```
 
-# Summary
 
-We can see from the above figure that the model gives a very positive prediction for the first ten samples. After submitting to kaggle, the score is also very good, 0.04141, which can be ranked 20/1314 in the global ranking. If we want to continue to optimize the model performance, we can use a better pre-training model to derive the feature vector, or fine-tune the pre-training model, or perform data augmentation.
+
+# Overfitting
+
+In the plots above, the training accuracy is increasing linearly over time, whereas validation accuracy stalls around 70% in the training process. Also, the difference in accuracy between training and validation accuracy is noticeable—a sign of *overfitting*.
+
+When there are a small number of training examples, the model sometimes learns from noises or unwanted details from training examples—to an extent that it negatively impacts the performance of the model on new examples. This phenomenon is known as overfitting. It means that the model will have a difficult time generalizing on a new dataset.
+
+There are multiple ways to fight overfitting in the training process. In this tutorial, you'll use *data augmentation* and add *dropout* to our model.
+
+## Data augmentation
+
+Overfitting generally occurs when there are a small number of training examples. One way to fix this problem is to augment the dataset so that it has a sufficient number of training examples. Data augmentation takes the approach of generating more training data from existing training samples by augmenting the samples using random transformations that yield believable-looking images. The goal is the model will never see the exact same picture twice during training. This helps expose the model to more aspects of the data and generalize better.
+
+Implement this in [`tf.keras`](https://www.tensorflow.org/api_docs/python/tf/keras) using the `ImageDataGenerator` class. Pass different transformations to the dataset and it will take care of applying it during the training process.
+
+### Augment and visualize data
+
+Begin by applying random horizontal flip augmentation to the dataset and see how individual images look like after the transformation.
+
+### Apply horizontal flip
+
+Pass `horizontal_flip` as an argument to the `ImageDataGenerator` class and set it to `True`to apply this augmentation.
+
+```
+image_gen = ImageDataGenerator(rescale=1./255, horizontal_flip=True)
+```
+
+```
+train_data_gen = image_gen.flow_from_directory(batch_size=batch_size,
+                                               directory=train_dir,
+                                               shuffle=True,
+                                               target_size=(IMG_HEIGHT, IMG_WIDTH))
+```
+
+Take one sample image from the training examples and repeat it five times so that the augmentation is applied to the same image five times.
+
+```
+augmented_images = [train_data_gen[0][0][0] for i in range(5)]
+```
+
+```
+# Re-use the same custom plotting function defined and used
+# above to visualize the training images
+plotImages(augmented_images)
+```
+
+### Randomly rotate the image
+
+Let's take a look at a different augmentation called rotation and apply 45 degrees of rotation randomly to the training examples.
+
+```
+image_gen = ImageDataGenerator(rescale=1./255, rotation_range=45)
+```
+
+```
+train_data_gen = image_gen.flow_from_directory(batch_size=batch_size,
+                                               directory=train_dir,
+                                               shuffle=True,
+                                               target_size=(IMG_HEIGHT, IMG_WIDTH))
+
+augmented_images = [train_data_gen[0][0][0] for i in range(5)]
+```
+
+```
+plotImages(augmented_images)
+```
+
+### Apply zoom augmentation
+
+Apply a zoom augmentation to the dataset to zoom images up to 50% randomly.
+
+```
+image_gen = ImageDataGenerator(rescale=1./255, zoom_range=0.5)
+```
+
+```
+train_data_gen = image_gen.flow_from_directory(batch_size=batch_size,
+                                               directory=train_dir,
+                                               shuffle=True,
+                                               target_size=(IMG_HEIGHT, IMG_WIDTH))
+
+augmented_images = [train_data_gen[0][0][0] for i in range(5)]
+```
+
+```
+plotImages(augmented_images)
+```
+
+### Put it all together
+
+Apply all the previous augmentations. Here, you applied rescale, 45 degree rotation, width shift, height shift, horizontal flip and zoom augmentation to the training images.
+
+```
+image_gen_train = ImageDataGenerator(
+                    rescale=1./255,
+                    rotation_range=45,
+                    width_shift_range=.15,
+                    height_shift_range=.15,
+                    horizontal_flip=True,
+                    zoom_range=0.5
+                    )
+```
+
+```
+train_data_gen = image_gen_train.flow_from_directory(batch_size=batch_size,
+                                                     directory=train_dir,
+                                                     shuffle=True,
+                                                     target_size=(IMG_HEIGHT, IMG_WIDTH),
+                                                     class_mode='binary')
+```
+
+Visualize how a single image would look five different times when passing these augmentations randomly to the dataset.
+
+```
+augmented_images = [train_data_gen[0][0][0] for i in range(5)]
+plotImages(augmented_images)
+```
+
+### Create validation data generator
+
+Generally, only apply data augmentation to the training examples. In this case, only rescale the validation images and convert them into batches using `ImageDataGenerator`.
+
+```
+image_gen_val = ImageDataGenerator(rescale=1./255)
+```
+
+```
+val_data_gen = image_gen_val.flow_from_directory(batch_size=batch_size,
+                                                 directory=validation_dir,
+                                                 target_size=(IMG_HEIGHT, IMG_WIDTH),
+                                                 class_mode='binary')
+```
+
+## Dropout
+
+Another technique to reduce overfitting is to introduce *dropout* to the network. It is a form of *regularization* that forces the weights in the network to take only small values, which makes the distribution of weight values more regular and the network can reduce overfitting on small training examples. Dropout is one of the regularization technique used in this tutorial
+
+When you apply dropout to a layer it randomly drops out (set to zero) number of output units from the applied layer during the training process. Dropout takes a fractional number as its input value, in the form such as 0.1, 0.2, 0.4, etc. This means dropping out 10%, 20% or 40% of the output units randomly from the applied layer.
+
+When appling 0.1 dropout to a certain layer, it randomly kills 10% of the output units in each training epoch.
+
+Create a network architecture with this new dropout feature and apply it to different convolutions and fully-connected layers.
+
+
+
+### Creating a new network with Dropouts
+
+ Applying dropout will randomly set 20% of the neurons to zero during each training epoch. This helps to avoid overfitting on the training dataset.
+
+```
+model_new = Sequential([
+    Conv2D(16, 3, padding='same', activation='relu', 
+           input_shape=(IMG_HEIGHT, IMG_WIDTH ,3)),
+    MaxPooling2D(),
+    Dropout(0.2),
+    Conv2D(32, 3, padding='same', activation='relu'),
+    MaxPooling2D(),
+    Conv2D(64, 3, padding='same', activation='relu'),
+    MaxPooling2D(),
+    Dropout(0.2),
+    Flatten(),
+    Dense(512, activation='relu'),
+    Dense(1, activation='sigmoid')
+])
+```
+
+### Compile the model
+
+After introducing dropouts to the network, compile the model and view the layers summary.
+
+```
+model_new.compile(optimizer='adam',
+              loss='binary_crossentropy',
+              metrics=['accuracy'])
+
+model_new.summary()
+```
+
+### Train the model
+
+After successfully introducing data augmentations to the training examples and adding dropouts to the network, train this new network:
+
+```
+history = model_new.fit_generator(
+    train_data_gen,
+    steps_per_epoch=total_train // batch_size,
+    epochs=epochs,
+    validation_data=val_data_gen,
+    validation_steps=total_val // batch_size
+)
+```
+
+
+
+### Visualize the model
+
+Visualize the new model after training, you can see that there is significantly less overfitting than before. The accuracy should go up after training the model for more epochs.
+
+```
+acc = history.history['accuracy']
+val_acc = history.history['val_accuracy']
+
+loss = history.history['loss']
+val_loss = history.history['val_loss']
+
+epochs_range = range(epochs)
+
+plt.figure(figsize=(8, 8))
+plt.subplot(1, 2, 1)
+plt.plot(epochs_range, acc, label='Training Accuracy')
+plt.plot(epochs_range, val_acc, label='Validation Accuracy')
+plt.legend(loc='lower right')
+plt.title('Training and Validation Accuracy')
+
+plt.subplot(1, 2, 2)
+plt.plot(epochs_range, loss, label='Training Loss')
+plt.plot(epochs_range, val_loss, label='Validation Loss')
+plt.legend(loc='upper right')
+plt.title('Training and Validation Loss')
+plt.show()
+```
+
